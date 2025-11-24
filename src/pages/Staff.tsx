@@ -4,9 +4,9 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ArrowLeft, UserCog } from "lucide-react";
-import { supabase } from "@/integrations/supabase/client";
 import { getCurrentUser } from "@/lib/supabase";
 import { useToast } from "@/hooks/use-toast";
+import { dbOperations } from "@/lib/db";
 
 interface Staff {
   id: string;
@@ -39,19 +39,16 @@ const Staff = () => {
   };
 
   const fetchStaff = async () => {
-    const { data, error } = await supabase
-      .from("staff")
-      .select("*")
-      .order("full_name");
-
-    if (error) {
+    try {
+      const data = await dbOperations.getAll("staff");
+      const sorted = data.sort((a, b) => a.full_name.localeCompare(b.full_name));
+      setStaff(sorted);
+    } catch (error) {
       toast({
         variant: "destructive",
         title: "Error",
         description: "Failed to fetch staff",
       });
-    } else {
-      setStaff(data || []);
     }
   };
 

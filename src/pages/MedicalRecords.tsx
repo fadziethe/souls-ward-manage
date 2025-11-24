@@ -9,10 +9,10 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { ArrowLeft, Plus, FileText, Search } from "lucide-react";
-import { supabase } from "@/integrations/supabase/client";
 import { getCurrentUser } from "@/lib/supabase";
 import { useToast } from "@/hooks/use-toast";
 import { z } from "zod";
+import { dbOperations, generateId, getCurrentTimestamp } from "@/lib/db";
 
 const medicalRecordSchema = z.object({
   patient_id: z.string().min(1, "Patient is required"),
@@ -24,12 +24,14 @@ const medicalRecordSchema = z.object({
 
 interface MedicalRecord {
   id: string;
+  patient_id: string;
   visit_date: string;
   diagnosis: string;
   treatment: string | null;
   prescription: string | null;
   notes: string | null;
-  patients: { full_name: string; patient_number: string };
+  patient_full_name?: string;
+  patient_number?: string;
 }
 
 interface Patient {
@@ -70,40 +72,52 @@ const MedicalRecords = () => {
   };
 
   const fetchRecords = async () => {
-    const { data, error } = await supabase
-      .from("medical_records")
-      .select(`
-        *,
-        patients (full_name, patient_number)
-      `)
-      .order("visit_date", { ascending: false });
-
-    if (error) {
+    try {
+      const data = await dbOperations.getAll("medical_records");
+      const patients = await dbOperations.getAll("patients");
+      
+      // Join patient data
+      const enriched = data.map(record => {
+        const patient = patients.find(p => p.id === record.patient_id);
+        return {
+          ...record,
+          patient_full_name: patient?.full_name || "Unknown",
+          patient_number: patient?.patient_number || "N/A",
+        };
+      });
+      
+      // Sort by visit date descending
+      enriched.sort((a, b) => 
+        new Date(b.visit_date).getTime() - new Date(a.visit_date).getTime()
+      );
+      
+      setRecords(enriched);
+    } catch (error) {
       toast({
         variant: "destructive",
         title: "Error",
         description: "Failed to fetch medical records",
       });
-    } else {
-      setRecords(data || []);
     }
   };
 
   const fetchPatients = async () => {
-    const { data, error } = await supabase
-      .from("patients")
-      .select("id, patient_number, full_name")
-      .eq("status", "active")
-      .order("full_name");
-
-    if (error) {
+    try {
+      const data = await dbOperations.getAll("patients");
+      const active = data
+        .filter(p => p.status === "active")
+        .sort((a, b) => a.full_name.localeCompare(b.full_name));
+      setPatients(active.map(p => ({
+        id: p.id,
+        patient_number: p.patient_number,
+        full_name: p.full_name,
+      })));
+    } catch (error) {
       toast({
         variant: "destructive",
         title: "Error",
         description: "Failed to fetch patients",
       });
-    } else {
-      setPatients(data || []);
     }
   };
 
@@ -116,46 +130,45 @@ const MedicalRecords = () => {
       
       const { user } = await getCurrentUser();
       
-      const { error } = await supabase.from("medical_records").insert([
-        {
-          patient_id: formData.patient_id,
-          doctor_id: user?.id,
-          visit_date: formData.visit_date,
-          diagnosis: formData.diagnosis,
-          treatment: formData.treatment || null,
-          prescription: formData.prescription || null,
-          notes: formData.notes || null,
-        },
-      ]);
+      await dbOperations.add("medical_records", {
+        id: generateId(),
+        patient_id: formData.patient_id,
+        doctor_id: user?.id || "",
+        visit_date: formData.visit_date,
+        diagnosis: formData.diagnosis,
+        treatment: formData.treatment || null,
+        prescription: formData.prescription || null,
+        notes: formData.notes || null,
+        created_at: getCurrentTimestamp(),
+        updated_at: getCurrentTimestamp(),
+      });
 
-      if (error) {
-        toast({
-          variant: "destructive",
-          title: "Error",
-          description: error.message,
-        });
-      } else {
-        toast({
-          title: "Success",
-          description: "Medical record added successfully",
-        });
-        setIsDialogOpen(false);
-        setFormData({
-          patient_id: "",
-          visit_date: "",
-          diagnosis: "",
-          treatment: "",
-          prescription: "",
-          notes: "",
-        });
-        fetchRecords();
-      }
+      toast({
+        title: "Success",
+        description: "Medical record added successfully",
+      });
+      setIsDialogOpen(false);
+      setFormData({
+        patient_id: "",
+        visit_date: "",
+        diagnosis: "",
+        treatment: "",
+        prescription: "",
+        notes: "",
+      });
+      fetchRecords();
     } catch (error) {
       if (error instanceof z.ZodError) {
         toast({
           variant: "destructive",
           title: "Validation Error",
           description: error.errors[0].message,
+        });
+      } else {
+        toast({
+          variant: "destructive",
+          title: "Error",
+          description: "Failed to add medical record",
         });
       }
     } finally {
@@ -165,8 +178,8 @@ const MedicalRecords = () => {
 
   const filteredRecords = records.filter(
     (record) =>
-      record.patients.full_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      record.patients.patient_number.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      record.patient_full_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      record.patient_number?.toLowerCase().includes(searchTerm.toLowerCase()) ||
       record.diagnosis.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
@@ -312,9 +325,9 @@ const MedicalRecords = () => {
                         </TableCell>
                         <TableCell>
                           <div>
-                            <p className="font-medium">{record.patients.full_name}</p>
+                            <p className="font-medium">{record.patient_full_name}</p>
                             <p className="text-sm text-muted-foreground">
-                              {record.patients.patient_number}
+                              {record.patient_number}
                             </p>
                           </div>
                         </TableCell>
