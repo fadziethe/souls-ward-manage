@@ -9,10 +9,10 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { ArrowLeft, Plus, Calendar } from "lucide-react";
-import { supabase } from "@/integrations/supabase/client";
 import { getCurrentUser } from "@/lib/supabase";
 import { useToast } from "@/hooks/use-toast";
 import { z } from "zod";
+import { dbOperations, generateId, getCurrentTimestamp } from "@/lib/db";
 
 const appointmentSchema = z.object({
   patient_id: z.string().min(1, "Patient is required"),
@@ -23,12 +23,14 @@ const appointmentSchema = z.object({
 
 interface Appointment {
   id: string;
+  patient_id: string;
   appointment_date: string;
   appointment_time: string;
   reason: string;
   status: string;
   notes: string | null;
-  patients: { full_name: string; patient_number: string };
+  patient_full_name?: string;
+  patient_number?: string;
 }
 
 interface Patient {
@@ -67,41 +69,54 @@ const Appointments = () => {
   };
 
   const fetchAppointments = async () => {
-    const { data, error } = await supabase
-      .from("appointments")
-      .select(`
-        *,
-        patients (full_name, patient_number)
-      `)
-      .order("appointment_date", { ascending: true })
-      .order("appointment_time", { ascending: true });
-
-    if (error) {
+    try {
+      const data = await dbOperations.getAll("appointments");
+      const patients = await dbOperations.getAll("patients");
+      
+      // Join patient data
+      const enriched = data.map(apt => {
+        const patient = patients.find(p => p.id === apt.patient_id);
+        return {
+          ...apt,
+          patient_full_name: patient?.full_name || "Unknown",
+          patient_number: patient?.patient_number || "N/A",
+        };
+      });
+      
+      // Sort by date and time
+      enriched.sort((a, b) => {
+        const dateCompare = a.appointment_date.localeCompare(b.appointment_date);
+        if (dateCompare !== 0) return dateCompare;
+        return a.appointment_time.localeCompare(b.appointment_time);
+      });
+      
+      setAppointments(enriched);
+    } catch (error) {
       toast({
         variant: "destructive",
         title: "Error",
         description: "Failed to fetch appointments",
       });
-    } else {
-      setAppointments(data || []);
     }
   };
 
   const fetchPatients = async () => {
-    const { data, error } = await supabase
-      .from("patients")
-      .select("id, patient_number, full_name")
-      .eq("status", "active")
-      .order("full_name");
-
-    if (error) {
+    try {
+      const data = await dbOperations.getAll("patients");
+      const active = data
+        .filter(p => p.status === "active")
+        .sort((a, b) => a.full_name.localeCompare(b.full_name));
+      setPatients(active.map(p => ({
+        id: p.id,
+        patient_number: p.patient_number,
+        full_name: p.full_name,
+      })));
+    } catch (error) {
       toast({
         variant: "destructive",
         title: "Error",
         description: "Failed to fetch patients",
       });
-    } else {
-      setPatients(data || []);
     }
   };
 
@@ -114,45 +129,45 @@ const Appointments = () => {
       
       const { user } = await getCurrentUser();
       
-      const { error } = await supabase.from("appointments").insert([
-        {
-          patient_id: formData.patient_id,
-          doctor_id: user?.id,
-          appointment_date: formData.appointment_date,
-          appointment_time: formData.appointment_time,
-          reason: formData.reason,
-          notes: formData.notes || null,
-          created_by: user?.id,
-        },
-      ]);
+      await dbOperations.add("appointments", {
+        id: generateId(),
+        patient_id: formData.patient_id,
+        doctor_id: user?.id || "",
+        appointment_date: formData.appointment_date,
+        appointment_time: formData.appointment_time,
+        reason: formData.reason,
+        status: "scheduled",
+        notes: formData.notes || null,
+        created_by: user?.id || "",
+        created_at: getCurrentTimestamp(),
+        updated_at: getCurrentTimestamp(),
+      });
 
-      if (error) {
-        toast({
-          variant: "destructive",
-          title: "Error",
-          description: error.message,
-        });
-      } else {
-        toast({
-          title: "Success",
-          description: "Appointment scheduled successfully",
-        });
-        setIsDialogOpen(false);
-        setFormData({
-          patient_id: "",
-          appointment_date: "",
-          appointment_time: "",
-          reason: "",
-          notes: "",
-        });
-        fetchAppointments();
-      }
+      toast({
+        title: "Success",
+        description: "Appointment scheduled successfully",
+      });
+      setIsDialogOpen(false);
+      setFormData({
+        patient_id: "",
+        appointment_date: "",
+        appointment_time: "",
+        reason: "",
+        notes: "",
+      });
+      fetchAppointments();
     } catch (error) {
       if (error instanceof z.ZodError) {
         toast({
           variant: "destructive",
           title: "Validation Error",
           description: error.errors[0].message,
+        });
+      } else {
+        toast({
+          variant: "destructive",
+          title: "Error",
+          description: "Failed to schedule appointment",
         });
       }
     } finally {
@@ -296,9 +311,9 @@ const Appointments = () => {
                         <TableCell>{appointment.appointment_time}</TableCell>
                         <TableCell>
                           <div>
-                            <p className="font-medium">{appointment.patients.full_name}</p>
+                            <p className="font-medium">{appointment.patient_full_name}</p>
                             <p className="text-sm text-muted-foreground">
-                              {appointment.patients.patient_number}
+                              {appointment.patient_number}
                             </p>
                           </div>
                         </TableCell>

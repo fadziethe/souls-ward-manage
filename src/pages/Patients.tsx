@@ -8,10 +8,10 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ArrowLeft, Plus, Search } from "lucide-react";
-import { supabase } from "@/integrations/supabase/client";
 import { getCurrentUser } from "@/lib/supabase";
 import { useToast } from "@/hooks/use-toast";
 import { z } from "zod";
+import { dbOperations, generateId, getCurrentTimestamp } from "@/lib/db";
 
 const patientSchema = z.object({
   patient_number: z.string().min(1, "Patient number is required"),
@@ -75,19 +75,19 @@ const Patients = () => {
   };
 
   const fetchPatients = async () => {
-    const { data, error } = await supabase
-      .from("patients")
-      .select("*")
-      .order("created_at", { ascending: false });
-
-    if (error) {
+    try {
+      const data = await dbOperations.getAll("patients");
+      // Sort by created_at descending
+      const sorted = data.sort((a, b) => 
+        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      );
+      setPatients(sorted);
+    } catch (error) {
       toast({
         variant: "destructive",
         title: "Error",
         description: "Failed to fetch patients",
       });
-    } else {
-      setPatients(data || []);
     }
   };
 
@@ -100,50 +100,50 @@ const Patients = () => {
       
       const { user } = await getCurrentUser();
       
-      const { error } = await supabase.from("patients").insert([
-        {
-          ...formData,
-          email: formData.email || null,
-          address: formData.address || null,
-          emergency_contact_name: formData.emergency_contact_name || null,
-          emergency_contact_phone: formData.emergency_contact_phone || null,
-          blood_group: formData.blood_group || null,
-          created_by: user?.id,
-        },
-      ]);
+      await dbOperations.add("patients", {
+        id: generateId(),
+        ...formData,
+        email: formData.email || null,
+        address: formData.address || null,
+        emergency_contact_name: formData.emergency_contact_name || null,
+        emergency_contact_phone: formData.emergency_contact_phone || null,
+        blood_group: formData.blood_group || null,
+        status: "active",
+        created_by: user?.id || "",
+        created_at: getCurrentTimestamp(),
+        updated_at: getCurrentTimestamp(),
+      });
 
-      if (error) {
-        toast({
-          variant: "destructive",
-          title: "Error",
-          description: error.message,
-        });
-      } else {
-        toast({
-          title: "Success",
-          description: "Patient added successfully",
-        });
-        setIsDialogOpen(false);
-        setFormData({
-          patient_number: "",
-          full_name: "",
-          date_of_birth: "",
-          gender: "",
-          phone: "",
-          email: "",
-          address: "",
-          emergency_contact_name: "",
-          emergency_contact_phone: "",
-          blood_group: "",
-        });
-        fetchPatients();
-      }
+      toast({
+        title: "Success",
+        description: "Patient added successfully",
+      });
+      setIsDialogOpen(false);
+      setFormData({
+        patient_number: "",
+        full_name: "",
+        date_of_birth: "",
+        gender: "",
+        phone: "",
+        email: "",
+        address: "",
+        emergency_contact_name: "",
+        emergency_contact_phone: "",
+        blood_group: "",
+      });
+      fetchPatients();
     } catch (error) {
       if (error instanceof z.ZodError) {
         toast({
           variant: "destructive",
           title: "Validation Error",
           description: error.errors[0].message,
+        });
+      } else {
+        toast({
+          variant: "destructive",
+          title: "Error",
+          description: "Failed to add patient",
         });
       }
     } finally {
