@@ -6,9 +6,10 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { ArrowLeft, Plus, Calendar } from "lucide-react";
+import { ArrowLeft, Plus, Calendar, Printer, Pencil, Trash2 } from "lucide-react";
 import { getCurrentUser } from "@/lib/supabase";
 import { useToast } from "@/hooks/use-toast";
 import { z } from "zod";
@@ -24,11 +25,15 @@ const appointmentSchema = z.object({
 interface Appointment {
   id: string;
   patient_id: string;
+  doctor_id: string;
   appointment_date: string;
   appointment_time: string;
   reason: string;
   status: string;
   notes: string | null;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
   patient_full_name?: string;
   patient_number?: string;
 }
@@ -45,7 +50,10 @@ const Appointments = () => {
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [patients, setPatients] = useState<Patient[]>([]);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [selectedAppointment, setSelectedAppointment] = useState<Appointment | null>(null);
   const [formData, setFormData] = useState({
     patient_id: "",
     appointment_date: "",
@@ -175,6 +183,92 @@ const Appointments = () => {
     }
   };
 
+  const handleEdit = (appointment: Appointment) => {
+    setSelectedAppointment(appointment);
+    setFormData({
+      patient_id: appointment.patient_id,
+      appointment_date: appointment.appointment_date,
+      appointment_time: appointment.appointment_time,
+      reason: appointment.reason,
+      notes: appointment.notes || "",
+    });
+    setIsEditDialogOpen(true);
+  };
+
+  const handleUpdate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedAppointment) return;
+    setIsLoading(true);
+
+    try {
+      appointmentSchema.parse(formData);
+
+      const { user } = await getCurrentUser();
+
+      await dbOperations.update("appointments", {
+        ...selectedAppointment,
+        patient_id: formData.patient_id,
+        appointment_date: formData.appointment_date,
+        appointment_time: formData.appointment_time,
+        reason: formData.reason,
+        notes: formData.notes || null,
+        doctor_id: selectedAppointment.doctor_id,
+        created_by: selectedAppointment.created_by,
+        created_at: selectedAppointment.created_at,
+        updated_at: getCurrentTimestamp(),
+      });
+
+      toast({
+        title: "Success",
+        description: "Appointment updated successfully",
+      });
+      setIsEditDialogOpen(false);
+      setSelectedAppointment(null);
+      fetchAppointments();
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        toast({
+          variant: "destructive",
+          title: "Validation Error",
+          description: error.errors[0].message,
+        });
+      } else {
+        toast({
+          variant: "destructive",
+          title: "Error",
+          description: "Failed to update appointment",
+        });
+      }
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleDeleteConfirm = async () => {
+    if (!selectedAppointment) return;
+
+    try {
+      await dbOperations.delete("appointments", selectedAppointment.id);
+      toast({
+        title: "Success",
+        description: "Appointment deleted successfully",
+      });
+      setIsDeleteDialogOpen(false);
+      setSelectedAppointment(null);
+      fetchAppointments();
+    } catch (error) {
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: "Failed to delete appointment",
+      });
+    }
+  };
+
+  const handlePrint = () => {
+    window.print();
+  };
+
   const getStatusColor = (status: string) => {
     const colors = {
       scheduled: "bg-info/20 text-info",
@@ -188,7 +282,7 @@ const Appointments = () => {
   return (
     <div className="min-h-screen bg-gradient-to-br from-background via-primary/5 to-secondary/10">
       <div className="container mx-auto px-4 py-8">
-        <div className="mb-6">
+        <div className="mb-6 no-print">
           <Button variant="ghost" onClick={() => navigate("/dashboard")}>
             <ArrowLeft className="mr-2 h-4 w-4" /> Back to Dashboard
           </Button>
@@ -204,7 +298,11 @@ const Appointments = () => {
                 </CardTitle>
                 <CardDescription>Schedule and manage patient appointments</CardDescription>
               </div>
-              <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+              <div className="flex gap-2 no-print">
+                <Button variant="outline" onClick={handlePrint}>
+                  <Printer className="mr-2 h-4 w-4" /> Print Report
+                </Button>
+                <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
                 <DialogTrigger asChild>
                   <Button>
                     <Plus className="mr-2 h-4 w-4" /> Schedule Appointment
@@ -281,6 +379,7 @@ const Appointments = () => {
                   </form>
                 </DialogContent>
               </Dialog>
+              </div>
             </div>
           </CardHeader>
           <CardContent>
@@ -293,12 +392,13 @@ const Appointments = () => {
                     <TableHead>Patient</TableHead>
                     <TableHead>Reason</TableHead>
                     <TableHead>Status</TableHead>
+                    <TableHead className="no-print">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {appointments.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={5} className="text-center text-muted-foreground">
+                      <TableCell colSpan={6} className="text-center text-muted-foreground">
                         No appointments found
                       </TableCell>
                     </TableRow>
@@ -327,6 +427,27 @@ const Appointments = () => {
                             {appointment.status}
                           </span>
                         </TableCell>
+                        <TableCell className="no-print">
+                          <div className="flex gap-2">
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => handleEdit(appointment)}
+                            >
+                              <Pencil className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => {
+                                setSelectedAppointment(appointment);
+                                setIsDeleteDialogOpen(true);
+                              }}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </TableCell>
                       </TableRow>
                     ))
                   )}
@@ -335,7 +456,110 @@ const Appointments = () => {
             </div>
           </CardContent>
         </Card>
+
+        {/* Edit Dialog */}
+        <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
+          <DialogContent className="max-w-2xl">
+            <DialogHeader>
+              <DialogTitle>Edit Appointment</DialogTitle>
+              <DialogDescription>Update appointment details</DialogDescription>
+            </DialogHeader>
+            <form onSubmit={handleUpdate} className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="edit_patient_id">Patient *</Label>
+                <Select
+                  value={formData.patient_id}
+                  onValueChange={(value) => setFormData({ ...formData, patient_id: value })}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select patient" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {patients.map((patient) => (
+                      <SelectItem key={patient.id} value={patient.id}>
+                        {patient.patient_number} - {patient.full_name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="edit_appointment_date">Date *</Label>
+                  <Input
+                    id="edit_appointment_date"
+                    type="date"
+                    value={formData.appointment_date}
+                    onChange={(e) => setFormData({ ...formData, appointment_date: e.target.value })}
+                    required
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="edit_appointment_time">Time *</Label>
+                  <Input
+                    id="edit_appointment_time"
+                    type="time"
+                    value={formData.appointment_time}
+                    onChange={(e) => setFormData({ ...formData, appointment_time: e.target.value })}
+                    required
+                  />
+                </div>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="edit_reason">Reason for Visit *</Label>
+                <Textarea
+                  id="edit_reason"
+                  value={formData.reason}
+                  onChange={(e) => setFormData({ ...formData, reason: e.target.value })}
+                  required
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="edit_notes">Additional Notes</Label>
+                <Textarea
+                  id="edit_notes"
+                  value={formData.notes}
+                  onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
+                />
+              </div>
+              <Button type="submit" className="w-full" disabled={isLoading}>
+                {isLoading ? "Updating..." : "Update Appointment"}
+              </Button>
+            </form>
+          </DialogContent>
+        </Dialog>
+
+        {/* Delete Confirmation Dialog */}
+        <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Are you sure?</AlertDialogTitle>
+              <AlertDialogDescription>
+                This will permanently delete the appointment for{" "}
+                <strong>{selectedAppointment?.patient_full_name}</strong> on{" "}
+                {selectedAppointment?.appointment_date}. This action cannot be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction onClick={handleDeleteConfirm}>
+                Delete
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </div>
+
+      <style>{`
+        @media print {
+          .no-print {
+            display: none !important;
+          }
+          .container {
+            max-width: 100% !important;
+          }
+        }
+      `}</style>
     </div>
   );
 };
