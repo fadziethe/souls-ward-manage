@@ -6,8 +6,9 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { ArrowLeft, Plus, Search } from "lucide-react";
+import { ArrowLeft, Plus, Search, Printer, Pencil, Trash2 } from "lucide-react";
 import { getCurrentUser } from "@/lib/supabase";
 import { useToast } from "@/hooks/use-toast";
 import { z } from "zod";
@@ -39,6 +40,9 @@ interface Patient {
   emergency_contact_phone: string | null;
   blood_group: string | null;
   status: string;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
 }
 
 const Patients = () => {
@@ -47,7 +51,10 @@ const Patients = () => {
   const [patients, setPatients] = useState<Patient[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
   const [formData, setFormData] = useState({
     patient_number: "",
     full_name: "",
@@ -151,6 +158,95 @@ const Patients = () => {
     }
   };
 
+  const handleEdit = (patient: Patient) => {
+    setSelectedPatient(patient);
+    setFormData({
+      patient_number: patient.patient_number,
+      full_name: patient.full_name,
+      date_of_birth: patient.date_of_birth,
+      gender: patient.gender,
+      phone: patient.phone,
+      email: patient.email || "",
+      address: patient.address || "",
+      emergency_contact_name: patient.emergency_contact_name || "",
+      emergency_contact_phone: patient.emergency_contact_phone || "",
+      blood_group: patient.blood_group || "",
+    });
+    setIsEditDialogOpen(true);
+  };
+
+  const handleUpdate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedPatient) return;
+    setIsLoading(true);
+
+    try {
+      patientSchema.parse(formData);
+
+      await dbOperations.update("patients", {
+        ...selectedPatient,
+        ...formData,
+        email: formData.email || null,
+        address: formData.address || null,
+        emergency_contact_name: formData.emergency_contact_name || null,
+        emergency_contact_phone: formData.emergency_contact_phone || null,
+        blood_group: formData.blood_group || null,
+        created_by: selectedPatient.created_by,
+        created_at: selectedPatient.created_at,
+        updated_at: getCurrentTimestamp(),
+      });
+
+      toast({
+        title: "Success",
+        description: "Patient updated successfully",
+      });
+      setIsEditDialogOpen(false);
+      setSelectedPatient(null);
+      fetchPatients();
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        toast({
+          variant: "destructive",
+          title: "Validation Error",
+          description: error.errors[0].message,
+        });
+      } else {
+        toast({
+          variant: "destructive",
+          title: "Error",
+          description: "Failed to update patient",
+        });
+      }
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleDeleteConfirm = async () => {
+    if (!selectedPatient) return;
+    
+    try {
+      await dbOperations.delete("patients", selectedPatient.id);
+      toast({
+        title: "Success",
+        description: "Patient deleted successfully",
+      });
+      setIsDeleteDialogOpen(false);
+      setSelectedPatient(null);
+      fetchPatients();
+    } catch (error) {
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: "Failed to delete patient",
+      });
+    }
+  };
+
+  const handlePrint = () => {
+    window.print();
+  };
+
   const filteredPatients = patients.filter(
     (patient) =>
       patient.full_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -174,7 +270,11 @@ const Patients = () => {
                 <CardTitle className="text-2xl">Patient Records</CardTitle>
                 <CardDescription>Manage patient information</CardDescription>
               </div>
-              <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+              <div className="flex gap-2 no-print">
+                <Button variant="outline" onClick={handlePrint}>
+                  <Printer className="mr-2 h-4 w-4" /> Print Report
+                </Button>
+                <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
                 <DialogTrigger asChild>
                   <Button>
                     <Plus className="mr-2 h-4 w-4" /> Add Patient
@@ -303,10 +403,11 @@ const Patients = () => {
                   </form>
                 </DialogContent>
               </Dialog>
+              </div>
             </div>
           </CardHeader>
           <CardContent>
-            <div className="mb-4">
+            <div className="mb-4 no-print">
               <div className="relative">
                 <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
                 <Input
@@ -328,12 +429,13 @@ const Patients = () => {
                     <TableHead>Phone</TableHead>
                     <TableHead>Blood Group</TableHead>
                     <TableHead>Status</TableHead>
+                    <TableHead className="no-print">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {filteredPatients.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={7} className="text-center text-muted-foreground">
+                      <TableCell colSpan={8} className="text-center text-muted-foreground">
                         No patients found
                       </TableCell>
                     </TableRow>
@@ -351,6 +453,27 @@ const Patients = () => {
                             {patient.status}
                           </span>
                         </TableCell>
+                        <TableCell className="no-print">
+                          <div className="flex gap-2">
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => handleEdit(patient)}
+                            >
+                              <Pencil className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => {
+                                setSelectedPatient(patient);
+                                setIsDeleteDialogOpen(true);
+                              }}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </TableCell>
                       </TableRow>
                     ))
                   )}
@@ -359,7 +482,163 @@ const Patients = () => {
             </div>
           </CardContent>
         </Card>
+
+        {/* Edit Dialog */}
+        <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
+          <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>Edit Patient</DialogTitle>
+              <DialogDescription>Update patient information</DialogDescription>
+            </DialogHeader>
+            <form onSubmit={handleUpdate} className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="edit_patient_number">Patient Number *</Label>
+                  <Input
+                    id="edit_patient_number"
+                    value={formData.patient_number}
+                    onChange={(e) => setFormData({ ...formData, patient_number: e.target.value })}
+                    required
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="edit_full_name">Full Name *</Label>
+                  <Input
+                    id="edit_full_name"
+                    value={formData.full_name}
+                    onChange={(e) => setFormData({ ...formData, full_name: e.target.value })}
+                    required
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="edit_date_of_birth">Date of Birth *</Label>
+                  <Input
+                    id="edit_date_of_birth"
+                    type="date"
+                    value={formData.date_of_birth}
+                    onChange={(e) => setFormData({ ...formData, date_of_birth: e.target.value })}
+                    required
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="edit_gender">Gender *</Label>
+                  <Select
+                    value={formData.gender}
+                    onValueChange={(value) => setFormData({ ...formData, gender: value })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select gender" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="Male">Male</SelectItem>
+                      <SelectItem value="Female">Female</SelectItem>
+                      <SelectItem value="Other">Other</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="edit_phone">Phone *</Label>
+                  <Input
+                    id="edit_phone"
+                    type="tel"
+                    value={formData.phone}
+                    onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+                    required
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="edit_email">Email</Label>
+                  <Input
+                    id="edit_email"
+                    type="email"
+                    value={formData.email}
+                    onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="edit_blood_group">Blood Group</Label>
+                  <Select
+                    value={formData.blood_group}
+                    onValueChange={(value) => setFormData({ ...formData, blood_group: value })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select blood group" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="A+">A+</SelectItem>
+                      <SelectItem value="A-">A-</SelectItem>
+                      <SelectItem value="B+">B+</SelectItem>
+                      <SelectItem value="B-">B-</SelectItem>
+                      <SelectItem value="AB+">AB+</SelectItem>
+                      <SelectItem value="AB-">AB-</SelectItem>
+                      <SelectItem value="O+">O+</SelectItem>
+                      <SelectItem value="O-">O-</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2 col-span-2">
+                  <Label htmlFor="edit_address">Address</Label>
+                  <Input
+                    id="edit_address"
+                    value={formData.address}
+                    onChange={(e) => setFormData({ ...formData, address: e.target.value })}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="edit_emergency_contact_name">Emergency Contact Name</Label>
+                  <Input
+                    id="edit_emergency_contact_name"
+                    value={formData.emergency_contact_name}
+                    onChange={(e) => setFormData({ ...formData, emergency_contact_name: e.target.value })}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="edit_emergency_contact_phone">Emergency Contact Phone</Label>
+                  <Input
+                    id="edit_emergency_contact_phone"
+                    type="tel"
+                    value={formData.emergency_contact_phone}
+                    onChange={(e) => setFormData({ ...formData, emergency_contact_phone: e.target.value })}
+                  />
+                </div>
+              </div>
+              <Button type="submit" className="w-full" disabled={isLoading}>
+                {isLoading ? "Updating..." : "Update Patient"}
+              </Button>
+            </form>
+          </DialogContent>
+        </Dialog>
+
+        {/* Delete Confirmation Dialog */}
+        <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Are you sure?</AlertDialogTitle>
+              <AlertDialogDescription>
+                This will permanently delete the patient record for{" "}
+                <strong>{selectedPatient?.full_name}</strong>. This action cannot be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction onClick={handleDeleteConfirm}>
+                Delete
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </div>
+
+      <style>{`
+        @media print {
+          .no-print {
+            display: none !important;
+          }
+          .container {
+            max-width: 100% !important;
+          }
+        }
+      `}</style>
     </div>
   );
 };
